@@ -1,6 +1,6 @@
 import ky from 'ky';
 import { createServerAdapter } from '@whatwg-node/server';
-import { createServer, Server as HttpServer, IncomingMessage } from 'node:http';
+import { createServer, type Server as HttpServer, type IncomingMessage } from 'http';
 import { AddressInfo } from 'node:net';
 import { once } from 'node:events';
 import { Agent } from 'undici';

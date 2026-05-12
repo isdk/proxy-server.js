@@ -1,6 +1,5 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { afterEach, describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import ky from 'ky';
-import { Agent, ProxyAgent } from 'undici';
 import { once } from 'node:events';
 import http from 'node:http';
 import { AddressInfo } from 'node:net';
