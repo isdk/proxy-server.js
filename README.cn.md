@@ -16,7 +16,8 @@
 确保你已经安装了核心库及必要依赖：
 
 ```bash
-pnpm add @isdk/proxy-server @isdk/proxy ky @whatwg-node/server undici
+# 如果nodejs版本 <= 20 必须指定 undici@6
+pnpm add @isdk/proxy-server @isdk/proxy ky @whatwg-node/server undici@6
 ```
 
 ## 快速开始

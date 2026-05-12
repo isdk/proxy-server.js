@@ -42,7 +42,7 @@
     "undici": "^6.25.0"
   },
   "peerDependencies": {
-    "@isdk/proxy": "*"
+    "@isdk/proxy": ">=0.2"
   },
   "devDependencies": {
     "@antfu/eslint-config": "^6.7.3",

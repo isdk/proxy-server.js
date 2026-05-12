@@ -100,7 +100,7 @@ export class HttpCachingProxy {
 
     // 初始化核心配置
     const config = options.config || {
-      default: { methods: ['GET', 'HEAD'] },
+      methods: ['GET', 'HEAD'],
       sites: {},
     };
 
@@ -142,20 +142,42 @@ export class HttpCachingProxy {
     const adapter = createServerAdapter(async (request: Request) => {
       debug('Incoming request: %s %s', request.method, request.url);
 
-      // 1. 匹配当前请求所属站点的缓存配置
-      const siteConfig = getSiteConfig(request.url, this._config);
+      // HTTP 代理模式下，URL 格式为 http://proxy:port/http://target:port/path
+      // 需要提取出实际的目标 URL
+      let targetRequest = request;
+      if (request.url.startsWith(this.url)) {
+        const proxyUrl = new URL(this.url);
+        const targetUrl = request.url.slice(proxyUrl.origin.length + 1); // +1 跳过开头的 "/"
+        debug('Extracted target URL: %s', targetUrl);
+        // 过滤 hop-by-hop headers（如 Transfer-Encoding），这些由 HTTP 客户端自动处理
+        const headers = new Headers();
+        request.headers.forEach((value, key) => {
+          if (!['transfer-encoding', 'connection'].includes(key.toLowerCase())) {
+            headers.set(key, value);
+          }
+        });
+        // Node.js fetch 要求发送 body 时必须设置 duplex: 'half'
+        targetRequest = new Request(targetUrl, {
+          method: request.method,
+          headers,
+          body: request.body,
+          duplex: 'half',
+        } as any);
+      }
+
+      // 匹配当前请求所属站点的缓存配置
+      const siteConfig = getSiteConfig(targetRequest.url, this._config);
 
       try {
-        // 2. 调用核心缓存协调函数
+        // 调用核心缓存协调函数
         const response = await fetchWithCacheBound(
-          request,
+          targetRequest,
           async (req) => {
             debug('Forwarding request to backend: %s', req.url);
-            // 使用 ky 发起后端请求，注入 dispatcher 处理 SSL
             return ky(req, {
-              throwHttpErrors: false, // 即使后端报错也返回 Response，交给核心逻辑判断是否缓存
+              throwHttpErrors: false,
               timeout: this._options.timeout,
-              // @ts-ignore: dispatcher is supported by native fetch in Node.js via undici
+              // @ts-ignore
               dispatcher,
             });
           },
@@ -167,12 +189,19 @@ export class HttpCachingProxy {
         );
 
         const cacheStatus = response.headers.get('x-proxy-cache');
-        debug('Response for %s: status=%d, cache=%s', request.url, response.status, cacheStatus);
+        debug('Response for %s: status=%d, cache=%s', targetRequest.url, response.status, cacheStatus);
 
         return response;
       } catch (error: any) {
-        this.logError(request as any, error);
-        return new Response(`${error.name}: ${error.message}`, {
+        this.logError(targetRequest as any, error);
+        // 递归遍历 cause 链找到原始错误
+        let originalError = error;
+        while (originalError.cause && originalError.cause !== originalError) {
+          originalError = originalError.cause;
+        }
+        const errorMessage = originalError.message || error.message;
+        const errorStack = originalError.stack || error.stack;
+        return new Response(`Error: ${errorMessage}\n${errorStack}`, {
           status: error.statusCode || 502,
         });
       }

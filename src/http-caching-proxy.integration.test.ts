@@ -5,12 +5,11 @@ import { once } from 'node:events';
 import http from 'node:http';
 import { AddressInfo } from 'node:net';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import os from 'node:os';
 import fs from 'node:fs';
 import { HttpCachingProxy, ProxyServerOptions } from './http-caching-proxy';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const CACHE_DIR = path.join(__dirname, '.cache-int');
+const CACHE_DIR = path.join(os.tmpdir(), 'http-caching-proxy-int-test');
 
 describe('HttpCachingProxy Integration', () => {
   let stubServerUrl: string;
@@ -45,6 +44,8 @@ describe('HttpCachingProxy Integration', () => {
     if (fs.existsSync(CACHE_DIR)) {
       fs.rmSync(CACHE_DIR, { recursive: true, force: true });
     }
+    // 重置 stubServerHandler，防止上一个测试的状态影响当前测试
+    stubServerHandler = undefined as any;
   });
 
   afterEach(async () => {
@@ -71,18 +72,32 @@ describe('HttpCachingProxy Integration', () => {
     return ky.create({
       // 这里的 trick 是：直接将请求发往代理服务器，但让核心逻辑识别目标 URL
       fetch: async (input, init) => {
-        const targetUrl = input.toString();
-        const { request: undiciRequest } = await import('undici');
-        
-        // 直接向代理服务器发起请求，但在 path 中传入完整的 targetUrl
-        const { statusCode, headers, body } = await undiciRequest(proxy.url, {
-          method: init?.method || 'GET',
-          path: targetUrl,
-          headers: init?.headers as any,
-          body: init?.body as any,
+        // ky 内部会将 input 转成 Request 对象
+        const request = input instanceof Request ? input :
+                        input instanceof URL ? new Request(input) :
+                        new Request(input, init);
+
+        const targetUrl = request.url;
+        const method = request.method;
+        const body = request.body;
+
+        // 提取 headers
+        const headersObj: Record<string, string> = {};
+        request.headers.forEach((value, key) => {
+          headersObj[key] = value;
         });
 
-        return new Response(body as any, {
+        const { request: undiciRequest } = await import('undici');
+
+        // 直接向代理服务器发起请求，但在 path 中传入完整的 targetUrl
+        const { statusCode, headers, body: responseBody } = await undiciRequest(proxy.url, {
+          method,
+          path: targetUrl,
+          headers: headersObj,
+          body: body as any,
+        } as any);
+
+        return new Response(responseBody as any, {
           status: statusCode,
           headers: headers as any,
         });
@@ -102,7 +117,7 @@ describe('HttpCachingProxy Integration', () => {
 
   it('proxies HTTP requests', async () => {
     await givenRunningProxy();
-    
+
     stubServerHandler = (req, res) => {
       res.writeHead(200);
       res.end('stub server response');
@@ -119,7 +134,7 @@ describe('HttpCachingProxy Integration', () => {
 
   it('caches responses', async () => {
     await givenRunningProxy();
-    
+
     let counter = 0;
     stubServerHandler = (req, res) => {
       counter++;
@@ -128,7 +143,7 @@ describe('HttpCachingProxy Integration', () => {
     };
 
     const client = createProxyClient();
-    
+
     // 第一次请求 - MISS
     const res1 = await client(stubServerUrl);
     expect(await res1.text()).toBe('response 1');
@@ -138,17 +153,17 @@ describe('HttpCachingProxy Integration', () => {
     const res2 = await client(stubServerUrl);
     expect(await res2.text()).toBe('response 1');
     expect(res2.headers.get('x-proxy-cache')).toBe('HIT');
-    
+
     expect(counter).toBe(1);
   });
 
   it('reports error for failed backend requests (502)', async () => {
     await givenRunningProxy({ logError: false });
-    
+
     const client = createProxyClient();
     // 访问一个不存在的端口
-    const res = await client('http://127.0.0.1:12345', { 
-      throwHttpErrors: false 
+    const res = await client('http://127.0.0.1:12345', {
+      throwHttpErrors: false
     });
 
     expect(res.status).toBe(502);
@@ -158,12 +173,12 @@ describe('HttpCachingProxy Integration', () => {
 
   it('forwards request body and headers', async () => {
     await givenRunningProxy();
-    
+
     stubServerHandler = async (req, res) => {
       const chunks = [];
       for await (const chunk of req) chunks.push(chunk);
       const body = Buffer.concat(chunks).toString();
-      
+
       res.writeHead(200, {
         'x-received-client-header': req.headers['x-client-header'] as string,
         'Content-Type': 'application/json'
@@ -185,13 +200,13 @@ describe('HttpCachingProxy Integration', () => {
   it('handles SWR (Stale-While-Revalidate)', async () => {
     // 强制缓存过期但允许 SWR
     await givenRunningProxy({ backgroundUpdate: true });
-    
+
     let counter = 0;
     stubServerHandler = (req, res) => {
       counter++;
       // 设置 1s 的缓存，但在 100s 内允许 stale
-      res.writeHead(200, { 
-        'Cache-Control': 'public, max-age=1, stale-while-revalidate=100' 
+      res.writeHead(200, {
+        'Cache-Control': 'public, max-age=1, stale-while-revalidate=100'
       });
       res.end(`count ${counter}`);
     };
