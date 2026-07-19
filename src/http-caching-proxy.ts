@@ -4,8 +4,8 @@ import { createServer, type Server as HttpServer, type IncomingMessage } from 'h
 import { AddressInfo } from 'node:net';
 import { once } from 'node:events';
 import { Agent } from 'undici';
-import debugFactory from 'debug';
 import {
+  debug as debugFactory,
   SmartCache,
   createFetchWithCache,
   getSiteConfig,
